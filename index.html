@@ -107,16 +107,32 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
   {id:'C-07',source:8},  // Level 9, score 81 / band 5
   {id:'C-08',source:13}  // A3, score 49 / band 3
  ];
+ // Four distinct, previously constructed human-panel geometries; no hard-reference boards.
+ const externalBoards=[
+  {id:'T-01',sourceId:'safe-2'},
+  {id:'T-02',sourceId:'balanced-1'},
+  {id:'T-03',sourceId:'traps-2'},
+  {id:'T-04',sourceId:'late-critical-1'}
+ ];
+ const externalRequested=new URLSearchParams(location.search).get('external')==='1'
+  || /^T-0[1-4]$/.test(new URLSearchParams(location.search).get('panel')||'');
+ const externalFixtures=externalRequested?externalBoards.map(({id,sourceId})=>{
+  const entry=panelBoards.find(x=>x.id===sourceId);
+  if(!entry)throw Error('Missing external test source: '+sourceId);
+  const base=LEVELS[entry.source];
+  return {...base,name:id,description:'Nezavisni slijepi test · četiri mjesta na stanici.',
+   vehicles:base.vehicles.map((v,i)=>{const [x,y,w,h,direction]=entry.layout[i];return {...v,x,y,w,h,direction};})};
+ }):null;
  const calibrationRequested=new URLSearchParams(location.search).get('calibration')==='1'
   || /^C-0[1-8]$/.test(new URLSearchParams(location.search).get('panel')||'');
  const calibrationFixtures=calibrationRequested?calibrationBoards.map(({id,source})=>({
   ...LEVELS[source],name:id,description:'Slijepi test težine i zanimljivosti · četiri mjesta na stanici.'
  })):null;
- const panelId=new URLSearchParams(location.search).get('panel')||(calibrationRequested?'C-01':'safe-1');
- const panelIndex=calibrationRequested?calibrationBoards.findIndex(entry=>entry.id===panelId):panelBoards.findIndex(entry=>entry.id===panelId);
+ const panelId=new URLSearchParams(location.search).get('panel')||(externalRequested?'T-01':calibrationRequested?'C-01':'safe-1');
+ const panelIndex=externalRequested?externalBoards.findIndex(entry=>entry.id===panelId):calibrationRequested?calibrationBoards.findIndex(entry=>entry.id===panelId):panelBoards.findIndex(entry=>entry.id===panelId);
  const panelMode=panelIndex>=0;
  if(panelMode){
-  const fixtures=calibrationRequested?calibrationFixtures:panelBoards.map(({id,source,layout})=>{
+  const fixtures=externalRequested?externalFixtures:calibrationRequested?calibrationFixtures:panelBoards.map(({id,source,layout})=>{
    const base=LEVELS[source];
    return {...base,name:id,description:"Ljudsko testiranje · četiri mjesta na stanici.",
     vehicles:base.vehicles.map((v,i)=>{
@@ -159,6 +175,7 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  }
  // Local-only gameplay telemetry. No data is transmitted automatically.
  const TELEMETRY_KEY='bpp-gameplay-telemetry-v1';
+ const testerId=(new URLSearchParams(location.search).get('tester')||'').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,32)||null;
  const telemetryNow=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
  let telemetryRecords=[],telemetryAttempt=null,telemetrySequence=0;
  try{const stored=JSON.parse(localStorage.getItem(TELEMETRY_KEY)||'[]');if(Array.isArray(stored))telemetryRecords=stored.slice(-500);}catch(_){}
@@ -173,13 +190,14 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
   telemetryAttempt.durationMs=Math.max(0,Math.round(telemetryNow()-telemetryAttempt.startedClock));
   telemetryAttempt.finishedAt=new Date().toISOString();
   telemetryRecords.push({...telemetryAttempt,startedClock:undefined});
+  if(outcome==='win'||outcome==='loss')window.__bppLastFinishedSession=telemetryAttempt.sessionId;
   telemetryRecords=telemetryRecords.slice(-500);
   telemetryPersist();telemetryAttempt=null;
  }
  function telemetryBegin(index){
   const level=LEVELS[index];
   telemetryAttempt={schemaVersion:1,sessionId:Date.now()+'-'+(++telemetrySequence),levelId:panelMode?level.name:(level.name||String(index+1)),
-   source:panelMode?'human-panel':window.__bppPlaytestIndex===index?'generator-playtest':'game',
+   source:panelMode?'human-panel':window.__bppPlaytestIndex===index?'generator-playtest':'game',testerId,
    startedAt:new Date().toISOString(),startedClock:telemetryNow(),outcome:null,
    vehicleCount:level.vehicles.length,initialLevel:JSON.parse(JSON.stringify(level)),
    events:[],firstConsequentialMistake:null,
@@ -187,7 +205,7 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  }
  function telemetryExport(){
   if(telemetryAttempt)telemetryEvent('export_while_playing');
-  const payload={schemaVersion:1,exportedAt:new Date().toISOString(),records:telemetryRecords,
+  const payload={schemaVersion:1,exportedAt:new Date().toISOString(),testerId,records:telemetryRecords,
    activeAttempt:telemetryAttempt?{...telemetryAttempt,startedClock:undefined,durationMs:Math.round(telemetryNow()-telemetryAttempt.startedClock)}:null};
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),link=document.createElement('a');
@@ -200,8 +218,19 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  telemetryLabel.style.cssText='font-size:12px;flex:1;min-width:160px';
  const telemetryExportButton=document.createElement('button');telemetryExportButton.type='button';telemetryExportButton.id='telemetryExport';telemetryExportButton.textContent='Izvezi rezultate (JSON)';
  telemetryExportButton.addEventListener('click',telemetryExport);
+ const verifyButton=document.createElement('button');verifyButton.type='button';verifyButton.textContent='Provjeri evidenciju';
+ verifyButton.addEventListener('click',()=>{
+  try{
+   const key='bpp-telemetry-selfcheck-'+Date.now();
+   const example={sessionId:'selfcheck',levelId:'T-01',outcome:'loss',playerDifficultyRating:5,playerInterestRating:4};
+   localStorage.setItem(key,JSON.stringify([example]));
+   const restored=JSON.parse(localStorage.getItem(key)||'null');localStorage.removeItem(key);
+   if(!Array.isArray(restored)||restored.length!==1||restored[0].playerDifficultyRating!==5||restored[0].playerInterestRating!==4)throw Error('Storage roundtrip failed');
+   alert('Provjera prošla: obje ocjene, ishod poraza i ID pokušaja ostaju sačuvani nakon upisa i čitanja. Ovo je tehnička provjera; za stvarni test ocijeni jedan nivo i provjeri JSON.');
+  }catch(e){alert('Provjera NIJE prošla: '+e.message);}
+ });
  const telemetryCount=document.createElement('span');telemetryCount.id='telemetryCount';telemetryCount.style.fontSize='12px';
- telemetryBar.append(telemetryLabel,telemetryCount,telemetryExportButton);
+ telemetryBar.append(telemetryLabel,telemetryCount,verifyButton,telemetryExportButton);
  if(typeof document.querySelector==='function')document.querySelector('.app')?.append(telemetryBar);
  function telemetryRefresh(){telemetryCount.textContent=telemetryRecords.length+' sačuvanih pokušaja';}
  telemetryRefresh();
@@ -209,6 +238,8 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  const vehicleById = id => state.vehicles.find(v=>v.id===id);
  function setMessage(text){$('gameMessage').textContent=text;}
  function initLevel(index){
+  window.__bppLastFinishedSession=null;
+  document.querySelectorAll('.pilot-rating').forEach(w=>{w.querySelectorAll('button').forEach(b=>{b.style.background='#22354b';b.setAttribute('aria-pressed','false');});w.querySelectorAll('.pilot-rating-status').forEach(t=>t.textContent='Ocjena nije unesena.');});
   if(telemetryAttempt)telemetryFinish('abandoned_or_restarted');
   telemetryRefresh();
   levelIndex=Math.max(0,Math.min(LEVELS.length-1,index));const level=LEVELS[levelIndex];
@@ -298,7 +329,7 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  function addPilotRating(overlayId){
   const modal=document.querySelector('#'+overlayId+' .modal');
   if(!modal)return;
-  const wrap=document.createElement('div');
+  const wrap=document.createElement('div');wrap.className='pilot-rating';
   wrap.style.cssText='margin:14px 0;padding:12px;border:1px solid #47617b;border-radius:10px;text-align:left';
   const heading=document.createElement('div');heading.textContent='Ocijeni nivo (neobavezno · samo playtest)';
   heading.style.cssText='font-weight:700;margin-bottom:8px';
@@ -307,7 +338,7 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
    const title=document.createElement('div');title.textContent=label+': 1 = '+low+', 5 = '+high;
    title.style.cssText='margin:10px 0 6px';
    const buttons=document.createElement('div');buttons.style.cssText='display:flex;flex-wrap:wrap;gap:6px';
-   const status=document.createElement('div');status.style.cssText='font-size:12px;margin:5px 0;color:#aebed0';
+   const status=document.createElement('div');status.className='pilot-rating-status';status.style.cssText='font-size:12px;margin:5px 0;color:#aebed0';
    status.textContent='Ocjena nije unesena.';
    for(let i=1;i<=5;i++){
     const b=document.createElement('button');b.type='button';b.textContent=String(i);
@@ -315,7 +346,7 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
     b.setAttribute('aria-pressed','false');
     b.style.cssText='min-width:42px;min-height:42px;border:1px solid #7891aa;border-radius:8px;background:#22354b;color:white';
     b.addEventListener('click',()=>{
-     const rec=telemetryRecords[telemetryRecords.length-1];
+     const rec=telemetryRecords.find(r=>r.sessionId===window.__bppLastFinishedSession);
      if(!rec||rec.levelId!==LEVELS[levelIndex].name||!['win','loss'].includes(rec.outcome)){
       status.textContent='Ocjena nije spremljena: završeni pokušaj nije pronađen.';return;
      }
