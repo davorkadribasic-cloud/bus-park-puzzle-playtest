@@ -275,6 +275,36 @@ button,select{font:inherit}button{border:1px solid #526982;border-radius:11px;ba
  $('restartButton').addEventListener('click',()=>initLevel(levelIndex));
  $('nextButton').addEventListener('click',()=>{if(levelIndex<LEVELS.length-1)initLevel(levelIndex+1);});
  $('continueButton').addEventListener('click',()=>{if(levelIndex<LEVELS.length-1)initLevel(levelIndex+1);else $('winOverlay').style.display='none';});
+
+ // Pilot feedback: rating is optional and saved on the completed attempt.
+ function addPilotRating(overlayId){
+  const modal=document.querySelector('#'+overlayId+' .modal');
+  if(!modal)return;
+  const wrap=document.createElement('div');
+  wrap.style.cssText='margin:14px 0;padding:12px;border:1px solid #47617b;border-radius:10px;text-align:left';
+  const heading=document.createElement('div');heading.textContent='Kako ocjenjuješ ovaj nivo? (neobavezno)';heading.style.cssText='font-weight:700;margin-bottom:8px';
+  const difficulty=document.createElement('div');difficulty.textContent='Težina: 1 = prelagano, 5 = preteško';difficulty.style.marginBottom='6px';
+  const buttons=document.createElement('div');buttons.style.cssText='display:flex;flex-wrap:wrap;gap:6px';
+  const status=document.createElement('div');status.style.cssText='font-size:12px;margin-top:8px;color:#aebed0';status.textContent='Odaberi ocjenu nakon završetka nivoa.';
+  for(let i=1;i<=5;i++){
+   const b=document.createElement('button');b.type='button';b.textContent=String(i);b.setAttribute('aria-label','Ocjena težine '+i);
+   b.style.cssText='min-width:42px;min-height:42px;border:1px solid #7891aa;border-radius:8px;background:#22354b;color:white';
+   b.addEventListener('click',()=>{
+    const rec=telemetryRecords[telemetryRecords.length-1];
+    if(!rec||rec.levelId!==(panelMode?LEVELS[levelIndex].name:LEVELS[levelIndex].name)){status.textContent='Ocjena nije spremljena: pokušaj nije pronađen.';return;}
+    rec.playerDifficultyRating=i;
+    rec.ratedAt=new Date().toISOString();
+    telemetryPersist();
+    for(const other of buttons.children){other.style.background=other===b?'#326e58':'#22354b';other.setAttribute('aria-pressed',String(other===b));}
+    status.textContent='Ocjena '+i+'/5 spremljena. Bit će uključena u JSON izvoz.';
+   });
+   buttons.append(b);
+  }
+  wrap.append(heading,difficulty,buttons,status);
+  const actionRow=modal.querySelector('.buttons');modal.insertBefore(wrap,actionRow);
+ }
+ addPilotRating('winOverlay');
+ addPilotRating('loseOverlay');
  $('replayButton').addEventListener('click',()=>initLevel(levelIndex));
  $('loseReplayButton').addEventListener('click',()=>initLevel(levelIndex));
  $('loseLevelButton').addEventListener('click',()=>{$('loseOverlay').style.display='none';$('levelSelect').focus();});
